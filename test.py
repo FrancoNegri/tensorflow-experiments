@@ -3,12 +3,17 @@ import random
 from IPython.display import clear_output
 from collections import deque
 
-import gym
+import keras
 
-from tensorflow.keras import Model, Sequential
-from tensorflow.keras.layers import Input, Dense, Embedding, Reshape
-from tensorflow.keras.optimizers import Adam
-from collections import deque
+import plaidml.keras
+import os
+plaidml.keras.install_backend()
+os.environ["KERAS_BACKEND"] = "plaidml.keras.backend"
+
+from keras.models import Sequential
+from keras.layers import Input, Dense, Embedding, Reshape
+from keras.optimizers import Adam
+import json
 
 print('Number of states: {}'.format(2))
 print('Number of actions: {}'.format(1))
@@ -49,6 +54,10 @@ class Agent:
         # Build networks
         self.q_network = self._build_compile_model()
         self.target_network = self._build_compile_model()
+        
+        #self.q_network = keras.models.load_model('model')
+        #self.target_network = keras.models.load_model('model')
+
         self.alighn_target_model()
 
     def store(self, state, action, reward, next_state):
@@ -58,13 +67,17 @@ class Agent:
     
     def _build_compile_model(self):
         model = Sequential()
-        model.add(Input(shape=(500,)))
-        model.add(Reshape((500,)))
+        #model.add(Input(shape=(500,)))
+        #model.add(Reshape((500,)))
         model.add(Dense(50, activation='relu'))
         model.add(Dense(50, activation='relu'))
         model.add(Dense(self._action_size, activation='sigmoid'))
         
+        
         model.compile(loss='mse', optimizer=self._optimizer)
+        model.build((None, 5))
+        print(model)
+        model.summary()
         return model
 
     def alighn_target_model(self):
@@ -74,6 +87,7 @@ class Agent:
         if np.random.rand() <= self.epsilon:
             return random.randint(0, 1)
         normalized_state = state / np.sqrt(np.sum(state**2))
+        #print(normalized_state)
         q_values = self.q_network.predict(normalized_state)
         return np.argmax(q_values[0])
 
@@ -86,8 +100,8 @@ class Agent:
             target[0][action] = reward + self.gamma * np.amax(t)        
             self.q_network.fit(state, target, epochs=1, verbose=0)
 
-    def save_model(self):
-    	self.q_network.save("model")
+    def save_model(self, i):
+    	self.q_network.save("model_" + str(i))
 
 class Kraken():
     def __init__(self, data, window_size):
@@ -95,8 +109,8 @@ class Kraken():
         self.data = deque(data)
         self.window = deque()
         for i in range(0, window_size):
-            price = self.data.pop()
-            self.window.append(price)
+            frame = self.next_frame()
+            self.window.append(frame)
         self.hodling = False
 
     def has_next(self):
@@ -105,60 +119,64 @@ class Kraken():
     def trade(self,action):
         reward = 0
         if action == 1 and not self.hodling:
-            self.buy_price = self.current_value
+            self.buy_price = self.current_value[4]
             self.hodling = True
             print("Now holding at: " + str(self.buy_price))
         if action == 0 and self.hodling:
             self.hodling = False
-            # implement fees
-            reward = ((self.current_value * 100)) / self.buy_price - 100
-            print("Sold at: " + str(self.current_value))
+            # fees of 0.4
+            reward = (((self.current_value[4] * 100)) / self.buy_price - 100.4)*100
+            print("Sold at: " + str(self.current_value[4]))
             print("Difference: " + str(reward) + " %") 
         return (reward, self.next())
 
     def next(self):
         self.window.pop()
-        self.current_value = self.data.pop()
-        print("Price is now: " + str(self.current_value))
+        self.current_value = self.next_frame()
+        print("Frame: " + str(self.current_value))
         self.window.append(self.current_value)
-        return self.window
+        return np.array(self.window)
 
+    def next_frame(self):
+    	frame = self.data.pop()
+    	return np.array([frame["low"], frame["high"], frame["trades"], frame["open"], frame["close"]])
 
-optimizer = Adam(learning_rate=0.01)
+optimizer = Adam()
 agent = Agent(optimizer)
 
 batch_size = 32
-num_of_episodes = 60
+num_of_episodes = 8
 timesteps_per_episode = 20000
 agent.q_network.summary()
-window_size = 500
+window_size = 20
 
 for e in range(0, num_of_episodes):
     # Reset the enviroment
-    file_name = 'trades/tr_' + str(e)
+    file_name = 'candles_5/tr_0' + str(e)
     print("Running: " + file_name)
     file = open(file_name, 'r')
-    new_price_volume_pairs = file.readlines() 
-    prices = [float(price_volume_pair.split(" ")[0]) for price_volume_pair in new_price_volume_pairs]
-    kraken = Kraken(prices, window_size)
+    candles = file.readlines() 
+    formated_candles = [ json.loads(candle) for candle in candles]
+    kraken = Kraken(formated_candles, window_size)
 
     # Initialize variables
     reward = 0
     state = kraken.next()
-    state = np.reshape(state, [1, window_size])
+    #state = np.reshape(state, [1, window_size])
 
     while kraken.has_next():
         # Run Action
         #enviroment.render()
         action = agent.act(state)
         # Take action
+        print(action)
         reward, next_state = kraken.trade(action)
 
-        next_state = np.reshape(next_state, [1, window_size])
+        #next_state = np.reshape(next_state, [1, window_size])
         agent.store(state, action, reward, next_state)
         state = next_state
         
         if len(agent.expirience_replay) > batch_size:
             agent.retrain(batch_size)
     print("Saving model...")
-    agent.save_model()
+    agent.save_model(e)
