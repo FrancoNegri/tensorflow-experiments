@@ -2,7 +2,6 @@ import numpy as np
 import random
 from IPython.display import clear_output
 from collections import deque
-import progressbar
 
 import gym
 
@@ -87,6 +86,9 @@ class Agent:
             target[0][action] = reward + self.gamma * np.amax(t)        
             self.q_network.fit(state, target, epochs=1, verbose=0)
 
+    def save_model(self):
+    	self.q_network.save("model")
+
 class Kraken():
     def __init__(self, data, window_size):
         self.time = 0
@@ -133,8 +135,9 @@ window_size = 500
 
 for e in range(0, num_of_episodes):
     # Reset the enviroment
-
-    file = open('trades/tr_' + str(e), 'r') 
+    file_name = 'trades/tr_' + str(e)
+    print("Running: " + file_name)
+    file = open(file_name, 'r')
     new_price_volume_pairs = file.readlines() 
     prices = [float(price_volume_pair.split(" ")[0]) for price_volume_pair in new_price_volume_pairs]
     kraken = Kraken(prices, window_size)
@@ -143,9 +146,7 @@ for e in range(0, num_of_episodes):
     reward = 0
     state = kraken.next()
     state = np.reshape(state, [1, window_size])
-    bar = progressbar.ProgressBar(maxval=timesteps_per_episode/10, widgets=[progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage()])
-    bar.start()
-    
+
     while kraken.has_next():
         # Run Action
         #enviroment.render()
@@ -159,10 +160,5 @@ for e in range(0, num_of_episodes):
         
         if len(agent.expirience_replay) > batch_size:
             agent.retrain(batch_size)
-    
-    bar.finish()
-    if (e + 1) % 10 == 0:
-        print("**********************************")
-        print("Episode: {}".format(e + 1))
-        enviroment.render()
-        print("**********************************")
+    print("Saving model...")
+    agent.save_model()
